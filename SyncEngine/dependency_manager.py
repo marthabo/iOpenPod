@@ -216,7 +216,7 @@ def download_ffmpeg(progress_callback=None) -> Optional[str]:
         return str(existing)
 
     # Download to temp file
-    suffix = ".zip" if url.endswith(".zip") else ".tar.xz" if url.endswith(".tar.xz") else ".tar.gz"
+    suffix = ".zip" if (url.endswith(".zip") or url.endswith("/zip")) else ".tar.xz" if url.endswith(".tar.xz") else ".tar.gz"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = Path(tmp.name)
 

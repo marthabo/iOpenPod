@@ -1193,7 +1193,9 @@ class PCLibrary:
 
             # Compilation flag
             cpil = audio.tags.get("cpil")
-            if cpil and len(cpil) > 0:
+            if isinstance(cpil, bool):
+                metadata["compilation"] = cpil
+            elif cpil and len(cpil) > 0:
                 metadata["compilation"] = bool(cpil[0])
 
             # Composer
@@ -1266,7 +1268,10 @@ class PCLibrary:
 
             # pcst: Podcast flag atom (boolean, present = podcast)
             pcst = audio.tags.get("pcst")
-            if pcst and len(pcst) > 0:
+            if isinstance(pcst, bool):
+                if pcst:
+                    metadata["is_podcast"] = True
+            elif pcst and len(pcst) > 0:
                 try:
                     if int(pcst[0]):
                         metadata["is_podcast"] = True
