@@ -890,8 +890,11 @@ class PCLibrary:
             if val:
                 metadata[meta_key] = val
 
-        # Compilation flag (TCMP frame)
-        metadata['compilation'] = _t('TCMP') == '1'
+        # Compilation flag (TCMP frame) — only set when explicitly present,
+        # consistent with M4A (cpil) and FLAC readers which skip absent tags.
+        tcmp = _t('TCMP')
+        if tcmp:
+            metadata['compilation'] = tcmp == '1'
 
         # Composer (TCOM frame)
         val = _t('TCOM')

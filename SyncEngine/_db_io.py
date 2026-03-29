@@ -74,7 +74,10 @@ def read_existing_database(ipod_path: Path) -> dict:
                 pl.update(extract_mhod_strings(mhod_children))
                 pl.update(extract_playlist_extras(mhod_children))
                 mhip_children = pl.pop("mhip_children", [])
-                pl["items"] = mhip_children
+                # parse_children wraps each item as {"chunk_type": ..., "data": {...}}.
+                # Flatten to the inner data dict so _build_regular_playlists can
+                # access track_id, group_id, etc. directly via item.get().
+                pl["items"] = [c["data"] for c in mhip_children if "data" in c]
 
         # Dataset 2: regular + user playlists (mhlp)
         # libgpod prefers DS3 over DS2 and only reads ONE.  We prefer
@@ -96,6 +99,18 @@ def read_existing_database(ipod_path: Path) -> dict:
         # Dataset 5: smart playlists for browsing (mhlp_smart)
         smart_playlists = data.get("mhlp_smart", [])
         _process_playlist_list(smart_playlists)
+
+        # Import On-The-Go playlists from OTGPlaylistInfo files.
+        # These are device-created playlists stored outside the iTunesDB; we
+        # inject them as regular playlists so they are committed to the
+        # iTunesDB on the next write.
+        from iTunesDB_Parser.otg import load_otg_playlists
+        itunes_dir = itdb_path.parent
+        otg = load_otg_playlists(str(itunes_dir), tracks)
+        for pl in otg:
+            if pl.get("playlist_id", 0) not in seen_ids:
+                seen_ids.add(pl["playlist_id"])
+                playlists.append(pl)
 
         logger.info(
             "Parsed iPod database: %d tracks, %d playlists, %d smart playlists",

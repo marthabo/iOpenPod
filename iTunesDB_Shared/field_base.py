@@ -378,6 +378,21 @@ def write_field(
     if _fmt in 'IiHhQqBbNnP':
         if not isinstance(value, int):
             value = int(value)
+        # Clamp to the valid range for the format so bad metadata (e.g. negative
+        # BPM, oversized play counts) never crashes the packer.
+        _INT_RANGES = {
+            'B': (0, 0xFF),
+            'H': (0, 0xFFFF),
+            'I': (0, 0xFFFF_FFFF),
+            'Q': (0, 0xFFFF_FFFF_FFFF_FFFF),
+            'b': (-0x80, 0x7F),
+            'h': (-0x8000, 0x7FFF),
+            'i': (-0x8000_0000, 0x7FFF_FFFF),
+            'q': (-0x8000_0000_0000_0000, 0x7FFF_FFFF_FFFF_FFFF),
+        }
+        if _fmt in _INT_RANGES:
+            _lo, _hi = _INT_RANGES[_fmt]
+            value = max(_lo, min(_hi, value))
     elif _fmt in 'fd':
         if not isinstance(value, float):
             value = float(value)

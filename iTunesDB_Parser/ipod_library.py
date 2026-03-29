@@ -59,6 +59,14 @@ def load_ipod_library(itunesdb_path: str,
         if merge_playcounts:
             _merge_play_counts(data, itunesdb_path)
 
+        # Import On-The-Go playlists from OTGPlaylistInfo files.
+        # These are device-created playlists stored outside the iTunesDB.
+        from .otg import load_otg_playlists
+        itunes_dir = os.path.dirname(itunesdb_path)
+        otg = load_otg_playlists(itunes_dir, data.get("mhlt", []))
+        if otg:
+            data.setdefault("mhlp", []).extend(otg)
+
         return data
     except Exception:
         logger.error("Error parsing iTunesDB", exc_info=True)

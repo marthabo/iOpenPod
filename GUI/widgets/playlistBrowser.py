@@ -1247,6 +1247,16 @@ class _PlaylistWriteWorker(QThread):
                     cache._user_playlists.clear()
                 except Exception:
                     pass
+                # OTG playlists were imported into the iTunesDB above;
+                # delete the source files so they aren't re-imported.
+                try:
+                    import os as _os
+                    from iTunesDB_Parser.otg import delete_otg_files
+                    delete_otg_files(
+                        _os.path.join(str(ipod_path), "iPod_Control", "iTunes")
+                    )
+                except Exception:
+                    pass
                 self.finished_ok.emit(matched_count, name)
             else:
                 self.failed.emit("Database write returned False.")

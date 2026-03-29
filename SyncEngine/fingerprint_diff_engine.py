@@ -310,6 +310,13 @@ _WRITER_DEFAULTS: dict[str, int | str] = {
     "disc_total": 1,    # _pc_track_to_info: disc_total or 1
 }
 
+# Fields where a falsy/absent PC value must NOT overwrite a truthy iPod value.
+# Compilation is set intentionally by the user; if the PC file lacks the tag
+# (TCMP/cpil absent → defaults to 0), that absence should not strip the flag
+# from the iPod.  The flag can only be promoted (0→1) by an explicit PC tag,
+# never demoted (1→0) by an absent one.
+_PC_ABSENT_PRESERVES_IPOD: frozenset[str] = frozenset({"compilation"})
+
 
 # ─── Engine ────────────────────────────────────────────────────────────────────
 
@@ -1010,6 +1017,12 @@ class FingerprintDiffEngine:
             if ipod_value is None:
                 ipod_value = ""
 
+            # Normalize bool → int so flag fields don't display as "True"/"False"
+            if isinstance(pc_value, bool):
+                pc_value = int(pc_value)
+            if isinstance(ipod_value, bool):
+                ipod_value = int(ipod_value)
+
             # Treat "" and 0 as equivalent "empty" values
             if pc_value == "" and ipod_value == 0:
                 continue
@@ -1023,6 +1036,12 @@ class FingerprintDiffEngine:
                 pc_empty = pc_value in ("", 0, None)
                 if pc_empty and ipod_value == writer_default:
                     continue
+
+            # For fields like compilation: a falsy/absent PC value must not
+            # strip a truthy iPod value.  The flag can only be promoted by an
+            # explicit PC tag, never demoted by an absent one.
+            if pc_field in _PC_ABSENT_PRESERVES_IPOD and not pc_value and ipod_value:
+                continue
 
             if isinstance(pc_value, str) and isinstance(ipod_value, str):
                 if pc_value.strip() != ipod_value.strip():

@@ -1855,8 +1855,7 @@ class SyncExecutor:
         - ``OTGPlaylistInfo`` (On-The-Go playlists created on device)
         """
         itunes_dir = self.ipod_path / "iPod_Control" / "iTunes"
-        for name in ("Play Counts", "iTunesStats", "PlayCounts.plist",
-                     "OTGPlaylistInfo"):
+        for name in ("Play Counts", "iTunesStats", "PlayCounts.plist"):
             path = itunes_dir / name
             if path.exists():
                 try:
@@ -1868,6 +1867,11 @@ class SyncExecutor:
                     # (idempotent for play/skip counts since they're additive
                     # and the cumulative was already written).
                     logger.warning("Could not delete %s: %s", path, exc)
+        # Delete all OTGPlaylistInfo files (base + numbered variants).
+        # OTG playlists were imported into the iTunesDB above, so these
+        # files are no longer needed.
+        from iTunesDB_Parser.otg import delete_otg_files
+        delete_otg_files(str(itunes_dir))
 
     # ── Track Conversion ────────────────────────────────────────────────────
 
