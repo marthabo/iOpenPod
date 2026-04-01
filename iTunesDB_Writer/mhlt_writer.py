@@ -19,7 +19,8 @@ from iTunesDB_Shared.field_base import MHLT_HEADER_SIZE, write_generic_header
 from .mhit_writer import write_mhit, TrackInfo
 
 
-def write_mhlt(tracks: List[TrackInfo], start_track_id: int, db_id_2: int, capabilities=None) -> tuple[bytes, int]:
+def write_mhlt(tracks: List[TrackInfo], start_track_id: int, db_id_2: int,
+               capabilities=None, db_version: int = 0) -> tuple[bytes, int]:
     """
     Write a complete MHLT chunk with all tracks.
 
@@ -28,6 +29,7 @@ def write_mhlt(tracks: List[TrackInfo], start_track_id: int, db_id_2: int, capab
         start_track_id: Starting track ID (increments for each track)
         db_id_2: Database-wide ID from MHBD (written into every MHIT at offset 0x124)
         capabilities: Optional DeviceCapabilities for gapless/video filtering
+        db_version: Database version — forwarded to write_mhit for header sizing
 
     Returns:
         Tuple of (complete MHLT chunk bytes, next available track ID)
@@ -39,7 +41,8 @@ def write_mhlt(tracks: List[TrackInfo], start_track_id: int, db_id_2: int, capab
 
     for track in tracks:
         try:
-            mhit_data = write_mhit(track, track_id, db_id_2, capabilities=capabilities)
+            mhit_data = write_mhit(track, track_id, db_id_2, capabilities=capabilities,
+                                   db_version=db_version)
         except Exception as exc:
             raise type(exc)(
                 f"{exc} (track #{track_id}: {track.artist!r} – {track.title!r})"

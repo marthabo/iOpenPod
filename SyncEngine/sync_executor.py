@@ -1505,7 +1505,7 @@ class SyncExecutor:
     # ── File Operations ─────────────────────────────────────────────────────
 
     def _get_next_media_folder(self) -> Path:
-        """Get next music folder (F00-Fxx) using round-robin. Thread-safe.
+        """Get next media folder (F00-Fxx) using round-robin. Thread-safe.
 
         The number of Fxx directories varies by device (3-50); defaults to
         20 (most common value) if device capabilities are unknown.

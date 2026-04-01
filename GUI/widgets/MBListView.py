@@ -2614,6 +2614,14 @@ class MusicBrowserList(QFrame):
         """Restore UI state after clipboard file prep (success, failure, or cancel)."""
         from PyQt6.QtWidgets import QApplication as _QApp
         if self._clip_progress_widget is not None:
+            # Disconnect track_done signal before clearing the widget
+            # to prevent signal firing on closed/deleted widget
+            t = self._clip_prep_thread
+            if t is not None:
+                try:
+                    t.track_done.disconnect()
+                except Exception:
+                    pass
             self._clip_progress_widget.close()
             self._clip_progress_widget = None
         if _QApp.overrideCursor() is not None:

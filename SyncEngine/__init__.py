@@ -2,7 +2,7 @@
 SyncEngine - Bridge between PC media library and iPod
 
 Core components:
-- PCLibrary: Scans PC music folder, extracts metadata
+- PCLibrary: Scans PC media folder, extracts metadata
 - FingerprintDiffEngine: Computes sync plan using acoustic fingerprints
 - SyncExecutor: Executes sync plan (copy, transcode, update mapping)
 - MappingManager: Tracks fingerprint → list[db_id] relationships

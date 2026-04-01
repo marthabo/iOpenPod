@@ -222,7 +222,7 @@ def write_mhyp(
     mhod_smart = b''
     smart_mhod_count = 0
     is_smart = smart_prefs is not None and smart_rules is not None
-    if is_smart:
+    if smart_prefs is not None and smart_rules is not None:
         mhod_smart += write_mhod50(smart_prefs)
         mhod_smart += write_mhod51(smart_rules)
         smart_mhod_count = 2

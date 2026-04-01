@@ -497,6 +497,7 @@ def _linux_usb_info_from_udevadm(device: str) -> dict:
         # Vendor check — only proceed for Apple devices
         id_vendor = props.get("ID_VENDOR_ID", "")
         if id_vendor != "05ac":
+            logger.debug("Linux udevadm %s: not Apple (vendor=%s)", device, id_vendor or "missing")
             return result
 
         # USB PID
@@ -588,6 +589,91 @@ def _linux_usb_info_from_sysfs(base_disk: str) -> dict:
     return result
 
 
+def _linux_usb_info_from_bus_scan(base_disk: str) -> dict:
+    """Scan ``/sys/bus/usb/devices/`` for an Apple device matching *base_disk*.
+
+    This is a last-resort fallback when neither udevadm nor the sysfs device
+    walk finds USB identity fields.  It works by:
+
+      1. Following ``/sys/block/{base_disk}`` real path to find which USB bus
+         address the block device lives under (e.g. ``usb2/2-1``).
+      2. Scanning ``/sys/bus/usb/devices/`` for an entry whose ``idVendor``
+         is ``05ac`` (Apple) and whose real path is an ancestor of the block
+         device's real path.
+      3. Reading ``idProduct`` and ``serial`` from that USB device.
+
+    Returns a dict that may contain *usb_pid*, *firewire_guid*,
+    *model_family*, and *generation*.
+    """
+    result: dict = {}
+
+    block_link = f"/sys/block/{base_disk}"
+    if not os.path.exists(block_link):
+        return result
+
+    block_real = os.path.realpath(block_link)
+
+    usb_devices_dir = "/sys/bus/usb/devices"
+    if not os.path.isdir(usb_devices_dir):
+        return result
+
+    try:
+        entries = os.listdir(usb_devices_dir)
+    except OSError:
+        return result
+
+    for entry in entries:
+        entry_path = os.path.join(usb_devices_dir, entry)
+        vendor_file = os.path.join(entry_path, "idVendor")
+        if not os.path.exists(vendor_file):
+            continue
+        try:
+            with open(vendor_file) as vf:
+                vendor = vf.read().strip()
+        except OSError:
+            continue
+        if vendor != "05ac":
+            continue
+
+        # Check if this USB device is an ancestor of the block device
+        usb_real = os.path.realpath(entry_path)
+        if not block_real.startswith(usb_real + "/"):
+            continue
+
+        # Found the Apple USB device that owns this disk
+        product_file = os.path.join(entry_path, "idProduct")
+        if os.path.exists(product_file):
+            try:
+                with open(product_file) as pf:
+                    product = pf.read().strip()
+                pid = int(product, 16)
+                result["usb_pid"] = pid
+                model_info = USB_PID_TO_MODEL.get(pid)
+                if model_info:
+                    result["model_family"] = model_info[0]
+                    result["generation"] = model_info[1]
+            except (ValueError, OSError):
+                pass
+
+        serial_file = os.path.join(entry_path, "serial")
+        if os.path.exists(serial_file):
+            try:
+                with open(serial_file) as sf:
+                    usb_serial = sf.read().strip().replace(" ", "")
+                if len(usb_serial) == 16:
+                    bytes.fromhex(usb_serial)
+                    result["firewire_guid"] = usb_serial.upper()
+                    logger.debug("Linux USB bus scan: FW GUID: %s", usb_serial.upper())
+            except (ValueError, OSError):
+                pass
+
+        if result:
+            logger.debug("Linux USB bus scan: %s", result)
+        break
+
+    return result
+
+
 def _probe_hardware_linux(mount_path: str) -> dict:
     """
     Linux hardware probing via sysfs / udevadm / findmnt.
@@ -603,8 +689,12 @@ def _probe_hardware_linux(mount_path: str) -> dict:
       3. ``lsblk --json``
 
     USB identity extraction:
-      1. ``udevadm info`` — structured key=value output, no root required
-      2. sysfs walk — manual traversal from block device to USB ancestor
+      1. ``udevadm info`` on the partition device
+      2. ``udevadm info`` on the parent disk device (Arch/CachyOS may not
+         propagate USB properties to partition devices)
+      3. sysfs walk — manual traversal from block device to USB ancestor
+      4. USB bus scan — walk ``/sys/bus/usb/devices/`` for Apple devices
+         matching this block device
     """
     import re as _re
 
@@ -620,12 +710,24 @@ def _probe_hardware_linux(mount_path: str) -> dict:
         dev_name = os.path.basename(device)
         base_disk = _re.sub(r"\d+$", "", dev_name)  # sdb1 → sdb
 
-        # ── Strategy 1: udevadm info (structured, reliable) ───────
+        # ── Strategy 1: udevadm info on partition ─────────────────
         result = _linux_usb_info_from_udevadm(device)
 
-        # ── Strategy 2: sysfs walk (fallback if udevadm unavailable) ──
+        # ── Strategy 2: udevadm info on parent disk ──────────────
+        #   On Arch-based distros (CachyOS, Manjaro, EndeavourOS), udev
+        #   rules may not propagate USB identity properties (ID_VENDOR_ID,
+        #   ID_MODEL_ID, ID_SERIAL_SHORT) from the USB device to its
+        #   partition children.  Querying the parent disk directly works.
+        if not result and base_disk != dev_name:
+            result = _linux_usb_info_from_udevadm(f"/dev/{base_disk}")
+
+        # ── Strategy 3: sysfs walk ────────────────────────────────
         if not result:
             result = _linux_usb_info_from_sysfs(base_disk)
+
+        # ── Strategy 4: USB bus scan (last resort) ────────────────
+        if not result:
+            result = _linux_usb_info_from_bus_scan(base_disk)
 
     except Exception as e:
         logger.debug("Linux hardware probe failed: %s", e)

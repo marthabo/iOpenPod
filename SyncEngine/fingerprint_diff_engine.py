@@ -549,7 +549,24 @@ class FingerprintDiffEngine:
         # mapping entries have already been claimed so each PC track gets its own.
         claimed_db_ids: set[int] = set()
 
-        for (fp, _album_key), pc_tracks_for_group in identity_groups.items():
+        # Sort identity groups so that groups whose album matches an existing
+        # iPod mapping entry process first.  Without this, iteration order is
+        # arbitrary (dict insertion order) and a *new* album variant can claim
+        # a mapping entry before the *matching* album group processes — causing
+        # a spurious duplicate ADD and a misattributed match.
+        def _album_match_priority(item):
+            (fp, album_key), _tracks = item
+            for entry in mapping.get_entries(fp):
+                ipod_track = ipod_by_db_id.get(entry.db_id)
+                if ipod_track:
+                    ipod_album = (ipod_track.get("Album", "") or "").strip().lower()
+                    if ipod_album == album_key:
+                        return 0  # has a matching entry → process first
+            return 1  # no match → process after confident matches
+
+        sorted_groups = sorted(identity_groups.items(), key=_album_match_priority)
+
+        for (fp, _album_key), pc_tracks_for_group in sorted_groups:
             # Pick representative track (first one from this album group)
             pc_track = pc_tracks_for_group[0]
             mapping_entries = mapping.get_entries(fp)
@@ -960,16 +977,17 @@ class FingerprintDiffEngine:
         Resolve a fingerprint collision (multiple mapping entries).
 
         Disambiguation cascade:
-          1. Single entry → trivial
-          2. source_path_hint matches → unique
-          3. Album name matches exactly one entry → unique
-          4. Album + track number matches → unique
+          1. source_path_hint matches → unique
+          2. Album name matches exactly one entry → unique
+          3. Album + track number matches → unique
+          4. Single entry, no album data available → accept on faith
           5. Otherwise → None (unresolved)
-        """
-        if len(entries) == 1:
-            return entries[0]
 
-        # Try source_path_hint
+        Phase 3 sorts identity groups so matching-album groups process first,
+        ensuring this function sees the right PC track before a non-matching
+        group can claim the entry via the single-entry fallback.
+        """
+        # Try source_path_hint (works for any entry count including 1)
         for entry in entries:
             if entry.source_path_hint and entry.source_path_hint == pc_track.relative_path:
                 return entry
@@ -1000,6 +1018,11 @@ class FingerprintDiffEngine:
                         tn_matches.append(entry)
                 if len(tn_matches) == 1:
                     return tn_matches[0]
+
+        # Single entry with no album data to verify — accept it on faith.
+        # (No ipod_by_db_id, or ipod track missing from DB.)
+        if len(entries) == 1:
+            return entries[0]
 
         logger.warning(
             f"Unresolved collision: {len(entries)} entries for same fingerprint, "

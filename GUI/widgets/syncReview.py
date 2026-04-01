@@ -2464,11 +2464,11 @@ class SyncReviewWidget(QWidget):
 
 
 class PCFolderDialog(QDialog):
-    """Dialog to select PC music folder for syncing."""
+    """Dialog to select PC media folder for syncing."""
 
     def __init__(self, parent=None, last_folder: str = ""):
         super().__init__(parent)
-        self.setWindowTitle("Select Music Folder")
+        self.setWindowTitle("Select Media Folder")
         self.setMinimumWidth((440))
         self.selected_folder = ""
         self.last_folder = last_folder
@@ -2503,7 +2503,7 @@ class PCFolderDialog(QDialog):
         layout.setContentsMargins((20), (16), (20), (16))
 
         # Title
-        title = QLabel("Select Music Folder", self)
+        title = QLabel("Select Media Folder", self)
         title.setFont(QFont(FONT_FAMILY, Metrics.FONT_TITLE, QFont.Weight.Bold))
         layout.addWidget(title)
 
@@ -2585,7 +2585,7 @@ class PCFolderDialog(QDialog):
     def _browse(self):
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Select Music Folder",
+            "Select Media Folder",
             self.last_folder,
             QFileDialog.Option.ShowDirsOnly
         )
@@ -2598,7 +2598,7 @@ class PCFolderDialog(QDialog):
             self.selected_folder = self.last_folder
 
         if not self.selected_folder:
-            QMessageBox.warning(self, "No Folder", "Please select a music folder.")
+            QMessageBox.warning(self, "No Folder", "Please select a media folder.")
             return
 
         if not os.path.isdir(self.selected_folder):

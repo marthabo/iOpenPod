@@ -18,7 +18,7 @@ Three sources of truth are kept consistent:
 
 ```mermaid
 flowchart LR
-    PC["PC Music Folder"] -- sync --> iPod
+    PC["PC Media Folder"] -- sync --> iPod
     subgraph iPod
         FS["Filesystem\n(F00–F49)"]
         DB["iTunesDB\n(binary)"]
@@ -63,7 +63,7 @@ This prevents the "greatest hits problem" where the same recording appears on mu
 
 ```mermaid
 flowchart TD
-    START([User clicks Sync]) --> FOLDER[Select PC music folder]
+    START([User clicks Sync]) --> FOLDER[Select PC media folder]
     FOLDER --> PREFLIGHT{Pre-flight checks}
     PREFLIGHT -- "fpcalc missing" --> BLOCK[Sync blocked]
     PREFLIGHT -- OK --> INTEGRITY[Phase 0: Integrity Check]
@@ -126,7 +126,7 @@ The integrity report is stored on the `SyncPlan` and displayed in the GUI as a n
 
 ## Phase 1 — PC Scan & Fingerprinting
 
-The `PCLibrary` class walks the user's chosen music folder recursively, reading metadata from every audio file via mutagen.
+The `PCLibrary` class walks the user's chosen media folder recursively, reading metadata from every audio file via mutagen.
 
 ### Supported Formats
 
@@ -568,7 +568,7 @@ The user can cancel at any point during execution. The `is_cancelled` callback (
 ```mermaid
 flowchart TB
     subgraph PC ["PC Side"]
-        FOLDER["Music Folder\n(.mp3, .flac, .m4a, ...)"]
+        FOLDER["Media Folder\n(.mp3, .flac, .m4a, ...)"]
         TAGS["File Metadata\n(mutagen)"]
         FP_TAG["Stored Fingerprints\n(ACOUSTID_FINGERPRINT tag)"]
     end

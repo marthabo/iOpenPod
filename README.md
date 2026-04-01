@@ -151,7 +151,7 @@ iOpenPod/
 
 The sync engine matches tracks between your PC and iPod using acoustic fingerprints ([Chromaprint](https://acoustid.org/chromaprint)). This means it can identify the same song even after re-encoding, format conversion, or metadata changes.
 
-1. Scan both the PC music folder and iPod's iTunesDB
+1. Scan both the PC media folder and iPod's iTunesDB
 2. Compute or read cached fingerprints for each track
 3. Diff by fingerprint to classify: new, removed, changed, or matched
 4. Present the sync plan for review

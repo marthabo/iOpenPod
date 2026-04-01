@@ -295,10 +295,26 @@ def write_mhbd(
         if composer_name:
             track.composer_id = composer_map.get(composer_name.lower(), 0)
 
+    # ── Compute db_version early — needed for MHIT header sizing ────
+    ref_version = reference_info.get('version', 0) if reference_info else 0
+    cap_version = capabilities.db_version if capabilities else 0
+    if cap_version:
+        # Device identified — use the higher of reference and capability
+        db_version = max(ref_version, cap_version)
+    elif ref_version:
+        # Device unknown — preserve the existing database's version
+        db_version = ref_version
+    else:
+        # No reference, no capabilities — use safe default
+        db_version = DATABASE_VERSION_DEFAULT
+    logger.debug("Using db_version=0x%X (ref=0x%X, cap=0x%X, default=0x%X)",
+                 db_version, ref_version, cap_version, DATABASE_VERSION_DEFAULT)
+
     # Build track list (Type 1 dataset)
     # This also returns next_track_id which tells us track IDs used
 
-    mhlt_data, next_track_id = write_mhlt(tracks, db_id_2=db_id_2, capabilities=capabilities, start_track_id=last_id + 1)
+    mhlt_data, next_track_id = write_mhlt(tracks, db_id_2=db_id_2, capabilities=capabilities,
+                                          db_version=db_version, start_track_id=last_id + 1)
     mhsd_type1 = write_mhsd_type1(mhlt_data)
 
     # Collect all track IDs for the master playlist
@@ -500,12 +516,7 @@ def write_mhbd(
     # +0x0C: compressed — 2 for devices with iTunesCDB, 1 otherwise
     compressed = 2 if (capabilities and capabilities.supports_compressed_db) else 1
 
-    # +0x10: Version — highest of reference and device capabilities.
-    ref_version = reference_info.get('version', 0) if reference_info else 0
-    cap_version = capabilities.db_version if capabilities else DATABASE_VERSION_DEFAULT
-    db_version = max(ref_version, cap_version) or DATABASE_VERSION_DEFAULT
-    logger.debug("Using db_version=0x%X (ref=0x%X, cap=0x%X, default=0x%X)",
-                 db_version, ref_version, cap_version, DATABASE_VERSION_DEFAULT)
+    # +0x10: Version — already computed above (before MHLT build)
 
     # +0x32: unk0x32 — preserve from reference (libgpod does this)
     unk0x32 = b'\x00' * 20

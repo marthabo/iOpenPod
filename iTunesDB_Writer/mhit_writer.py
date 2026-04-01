@@ -34,7 +34,7 @@ from iTunesDB_Shared.constants import (
     MEDIA_TYPE_VIDEO_PODCAST,
 )
 from iTunesDB_Shared.field_base import write_fields, write_generic_header
-from iTunesDB_Shared.mhit_defs import MHIT_HEADER_SIZE
+from iTunesDB_Shared.mhit_defs import MHIT_HEADER_SIZE, mhit_header_size_for_version
 from .mhod_writer import write_track_mhods
 
 
@@ -239,7 +239,7 @@ def _gapless_or_zero(value: int, capabilities) -> int:
 
 
 def write_mhit(track: TrackInfo, track_id: int, db_id_2: int = 0,
-               capabilities=None) -> bytes:
+               capabilities=None, db_version: int = 0) -> bytes:
     """Write a complete MHIT chunk with all child MHODs.
 
     Args:
@@ -247,6 +247,8 @@ def write_mhit(track: TrackInfo, track_id: int, db_id_2: int = 0,
         track_id: Unique track ID within this database.
         db_id_2: Database-wide ID from MHBD offset 0x24 (written into every track).
         capabilities: Optional DeviceCapabilities for gapless/video filtering.
+        db_version: Database version — controls the MHIT header size.
+                    Older iPods require smaller headers (e.g. 0x148 for db_version ≤ 0x19).
 
     Returns:
         Complete MHIT chunk bytes (header + MHODs).
@@ -280,7 +282,11 @@ def write_mhit(track: TrackInfo, track_id: int, db_id_2: int = 0,
         chapter_data=track.chapter_data,
     )
 
-    total_length = MHIT_HEADER_SIZE + len(mhod_data)
+    # Use device-appropriate header size.  Older iPod firmware expects smaller
+    # MHIT headers; fields beyond the header boundary are automatically skipped
+    # by write_fields() via each field's min_header_length attribute.
+    header_size = mhit_header_size_for_version(db_version) if db_version else MHIT_HEADER_SIZE
+    total_length = header_size + len(mhod_data)
 
     # Assemble the values dict — write_fields handles transforms & packing.
     values: dict = {
@@ -360,8 +366,8 @@ def write_mhit(track: TrackInfo, track_id: int, db_id_2: int = 0,
         'composer_id': track.composer_id,
     }
 
-    header = bytearray(MHIT_HEADER_SIZE)
-    write_generic_header(header, 0, b'mhit', MHIT_HEADER_SIZE, total_length)
-    write_fields(header, 0, 'mhit', values, MHIT_HEADER_SIZE)
+    header = bytearray(header_size)
+    write_generic_header(header, 0, b'mhit', header_size, total_length)
+    write_fields(header, 0, 'mhit', values, header_size)
 
     return bytes(header) + mhod_data

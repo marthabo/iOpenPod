@@ -39,7 +39,7 @@ def get_version() -> str:
     try:
         return _pkg_version("iopenpod")
     except Exception:
-        return "1.0.30"
+        return "1.0.39"
 
 
 def default_data_dir() -> str:
@@ -336,6 +336,10 @@ class AppSettings:
                         value = float(value)
                     if isinstance(value, expected_type):
                         setattr(settings, key, value)
+
+            # ── Migration: music_folder (str) → media_folder (str) ─────
+            if "media_folder" not in data and "music_folder" in data:
+                settings.media_folder = data["music_folder"]
 
             # ── Migration: aac_bitrate (int) → aac_quality (str) ────────
             if "aac_quality" not in data and "aac_bitrate" in data:
