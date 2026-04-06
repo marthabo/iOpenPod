@@ -7,11 +7,16 @@ Same song encoded as MP3 or FLAC → same fingerprint.
 Requires: fpcalc binary (Chromaprint) - https://acoustid.org/chromaprint
 
 Storage: Fingerprints are stored in file metadata as ACOUSTID_FINGERPRINT tag.
+A filesystem-level cache (fingerprint_cache.json) avoids re-reading tags or
+re-running fpcalc when a file's path/mtime/size haven't changed.
 """
 
+import json
+import os
 import subprocess
 import sys
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, Any
 import shutil
@@ -48,6 +53,96 @@ logger = logging.getLogger(__name__)
 # Tag names for storing fingerprint in different formats
 FINGERPRINT_TAG = "ACOUSTID_FINGERPRINT"
 FINGERPRINT_TAG_MP4 = "----:com.apple.iTunes:ACOUSTID_FINGERPRINT"
+
+
+class FingerprintCache:
+    """Disk-backed cache mapping (path, mtime, size) → fingerprint.
+
+    Avoids re-reading file metadata or re-running fpcalc when a file
+    hasn't changed since the last sync.  The cache is stored as a JSON
+    file in the settings/cache directory and is loaded lazily on first
+    access.
+    """
+
+    _instance: Optional["FingerprintCache"] = None
+    _lock = threading.Lock()
+
+    def __init__(self, cache_path: str | Path):
+        self._path = Path(cache_path)
+        self._dirty = False
+        self._data: dict[str, dict] = {}  # path → {"mtime": float, "size": int, "fp": str}
+        self._io_lock = threading.Lock()
+        self._load()
+
+    def _load(self):
+        if self._path.exists():
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    self._data = raw
+                    logger.debug("Loaded fingerprint cache with %d entries", len(self._data))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Could not load fingerprint cache: %s", e)
+                self._data = {}
+
+    def lookup(self, filepath: Path) -> Optional[str]:
+        key = str(filepath)
+        entry = self._data.get(key)
+        if entry is None:
+            return None
+        try:
+            st = filepath.stat()
+        except OSError:
+            return None
+        if st.st_size == entry.get("size") and abs(st.st_mtime - entry.get("mtime", 0)) < 0.01:
+            return entry.get("fp")
+        return None
+
+    def store(self, filepath: Path, fingerprint: str):
+        try:
+            st = filepath.stat()
+        except OSError:
+            return
+        with self._io_lock:
+            self._data[str(filepath)] = {
+                "mtime": st.st_mtime,
+                "size": st.st_size,
+                "fp": fingerprint,
+            }
+            self._dirty = True
+
+    def save(self):
+        with self._io_lock:
+            if not self._dirty:
+                return
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._path.with_suffix(".tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._data, f, separators=(",", ":"))
+                tmp.replace(self._path)
+                self._dirty = False
+                logger.debug("Saved fingerprint cache (%d entries)", len(self._data))
+            except OSError as e:
+                logger.warning("Could not save fingerprint cache: %s", e)
+
+    @classmethod
+    def get_instance(cls) -> "FingerprintCache":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    from settings import default_cache_dir
+                    cache_dir = default_cache_dir()
+                    path = os.path.join(cache_dir, "fingerprint_cache.json")
+                    cls._instance = cls(path)
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton (useful for testing)."""
+        with cls._lock:
+            cls._instance = None
 
 
 def find_fpcalc() -> Optional[str]:
@@ -287,6 +382,11 @@ def get_or_compute_fingerprint(
 
     This is the main entry point for fingerprinting.
 
+    Lookup order:
+    1. Filesystem cache (fingerprint_cache.json) — instant if path/mtime/size match
+    2. File metadata tag (ACOUSTID_FINGERPRINT) — requires parsing file headers
+    3. Compute via fpcalc — slowest, subprocess call
+
     Args:
         filepath: Path to audio file
         fpcalc_path: Optional path to fpcalc binary
@@ -296,25 +396,36 @@ def get_or_compute_fingerprint(
         Fingerprint string, or None if unavailable
     """
     filepath = Path(filepath)
+    cache = FingerprintCache.get_instance()
 
-    # Try to read existing fingerprint
+    # 1. Check filesystem cache (no file I/O needed)
+    cached = cache.lookup(filepath)
+    if cached:
+        logger.debug(f"Cache hit for {filepath.name}")
+        return cached
+
+    # 2. Try to read existing fingerprint from file tags
     fingerprint = read_fingerprint(filepath)
     if fingerprint:
         logger.debug(f"Read existing fingerprint for {filepath.name}")
+        cache.store(filepath, fingerprint)
         return fingerprint
 
-    # Compute new fingerprint
+    # 3. Compute new fingerprint
     logger.debug(f"Computing fingerprint for {filepath.name}")
     fingerprint = compute_fingerprint(filepath, fpcalc_path)
     if not fingerprint:
         return None
 
-    # Optionally store it
+    # Optionally store in file metadata
     if write_to_file:
         if write_fingerprint(filepath, fingerprint):
             logger.debug(f"Stored fingerprint in {filepath.name}")
         else:
             logger.warning(f"Could not store fingerprint in {filepath.name}")
+
+    # Update cache with current file stats (post-write if applicable)
+    cache.store(filepath, fingerprint)
 
     return fingerprint
 

@@ -501,6 +501,9 @@ class FingerprintDiffEngine:
                     # Cancel remaining futures and bail out
                     for f in futures:
                         f.cancel()
+                    # Save partial fingerprint progress
+                    from SyncEngine.audio_fingerprint import FingerprintCache
+                    FingerprintCache.get_instance().save()
                     return plan
 
                 with completed_lock:
@@ -518,6 +521,10 @@ class FingerprintDiffEngine:
 
                 pc_by_fp.setdefault(fp, []).append(track)
                 seen_fps.add(fp)
+
+        # Persist the fingerprint cache so the next sync is fast
+        from SyncEngine.audio_fingerprint import FingerprintCache
+        FingerprintCache.get_instance().save()
 
         # ===== Phase 2: Group by identity (fingerprint + album) =====
         # Same fingerprint + same album = true duplicate (pick one, report rest)
