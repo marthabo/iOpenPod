@@ -24,9 +24,10 @@ Grab the latest release for your platform. No Python required, no setup wizards,
 |----------|------|-------------|
 | **Windows** | `iOpenPod-windows.zip` | Extract, and run `iOpenPod.exe` |
 | **macOS** | `iOpenPod-macos.tar.gz` | Extract, and run `iOpenPod.app`, you will need to allow the unknown developer in System Settings. |
-| **Linux** | `iOpenPod-linux.tar.gz` | Extract, and run `./iOpenPod` |
+| **Linux (All distros)** | `iOpenPod-linux.tar.gz` | Extract, and run `./iOpenPod` |
+| **Linux (Arch-based)** | [`iopenpod`](https://aur.archlinux.org/packages/iopenpod)<sup>AUR</sup> | Available in the AUR |
 
-Once installed, iOpenPod can check for updates automatically and can update itself right from the app.
+Once installed, iOpenPod can check for updates automatically and can update itself right from the app. (Except when installed from AUR.)
 
 > **Optional extras:** Install [FFmpeg](https://ffmpeg.org/) for transcoding (FLAC to ALAC, etc.) and [Chromaprint](https://acoustid.org/chromaprint) for acoustic fingerprinting needed for syncing.
 
