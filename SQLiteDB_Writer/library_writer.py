@@ -725,6 +725,7 @@ def write_library_itdb(
         album_artist_pids: dict[tuple[str, str], int] = {}
         album_artwork_pids: dict[tuple[str, str], int] = {}
         album_feed_urls: dict[tuple[str, str], str] = {}
+        artist_artwork_album_pids: dict[str, int] = {}  # artist_name → album_pid with art
 
         for track in tracks:
             album_name = track.album or ""
@@ -767,6 +768,11 @@ def write_library_itdb(
             a_artist_order = _lookup_order(orders, 'album_artist', album_artist_name)
 
             a_feed_url = album_feed_urls.get(key)
+            album_art_status = 1 if artwork_pid else 0
+
+            # Track the first album with artwork for each artist
+            if artwork_pid and album_artist_name not in artist_artwork_album_pids:
+                artist_artwork_album_pids[album_artist_name] = album_pid
 
             cur.execute(
                 "INSERT INTO album (pid, kind, artwork_status, artwork_item_pid, "
@@ -774,8 +780,8 @@ def write_library_itdb(
                 "feed_url, season_number, is_unknown, has_songs, has_music_videos, "
                 "sort_order, artist_order, has_any_compilations, sort_name, "
                 "artist_count_calc, has_movies, item_count) "
-                "VALUES (?, 2, 0, ?, ?, 0, ?, ?, ?, ?, 0, ?, 1, 0, ?, ?, ?, ?, 0, 0, ?)",
-                (album_pid, _s64(artwork_pid), a_pid,
+                "VALUES (?, 2, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?, 1, 0, ?, ?, ?, ?, 0, 0, ?)",
+                (album_pid, album_art_status, _s64(artwork_pid), a_pid,
                  album_name or None, a_name_order, is_compilation,
                  a_feed_url, is_unknown,
                  a_name_order, a_artist_order, is_compilation, a_sort_name,
@@ -791,11 +797,14 @@ def write_library_itdb(
             is_unknown = 1 if not artist_name else 0
             a_name_order = artist_name_orders.get(artist_name, 0)
             a_sort_name = strip_article(artist_name) if artist_name else None
+            art_album_pid = artist_artwork_album_pids.get(artist_name or "", 0)
+            artist_art_status = 1 if art_album_pid else 0
             cur.execute(
                 "INSERT INTO artist (pid, kind, artwork_status, artwork_album_pid, "
                 "name, name_order, sort_name, is_unknown, has_songs, has_music_videos) "
-                "VALUES (?, 2, 0, 0, ?, ?, ?, ?, 1, 0)",
-                (a_pid, artist_name or None, a_name_order, a_sort_name,
+                "VALUES (?, 2, ?, ?, ?, ?, ?, ?, 1, 0)",
+                (a_pid, artist_art_status, _s64(art_album_pid),
+                 artist_name or None, a_name_order, a_sort_name,
                  is_unknown)
             )
 

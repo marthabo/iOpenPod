@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional
+from typing import ClassVar, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,14 @@ class AudioProperties:
     sample_rate: int = 0
     bits_per_sample: int = 0
     channels: int = 0
+    codec_name: str = ""   # e.g. "aac", "mp3", "flac"
+    profile: str = ""      # e.g. "LC", "HE-AAC", "HE-AACv2"
+    probe_ok: bool = False  # False when ffprobe couldn't parse the file
+
+    # AAC profiles the iPod can play — anything else is re-encoded
+    _COMPATIBLE_AAC_PROFILES: ClassVar[frozenset[str]] = frozenset({
+        "lc", "aac_low", "aac lc",
+    })
 
     def exceeds_ipod_limits(self) -> bool:
         return (
@@ -217,24 +225,36 @@ class AudioProperties:
             or self.channels > IPOD_MAX_CHANNELS
         )
 
+    def is_incompatible_aac_profile(self) -> bool:
+        """True if the stream is AAC but not a profile the iPod supports."""
+        if self.codec_name.lower() != "aac":
+            return False
+        # Empty profile string means ffprobe couldn't determine it — treat as incompatible
+        if not self.profile:
+            return True
+        return self.profile.lower() not in self._COMPATIBLE_AAC_PROFILES
+
 
 def probe_audio(filepath: str | Path) -> AudioProperties:
-    """Probe the first audio stream for sample rate, bit depth, channels."""
+    """Probe the first audio stream for sample rate, bit depth, channels, and codec."""
     info = _run_ffprobe([
         "-select_streams", "a:0",
-        "-show_entries", "stream=sample_rate,bits_per_raw_sample,channels",
+        "-show_entries", "stream=sample_rate,bits_per_raw_sample,channels,codec_name,profile",
         str(filepath),
     ])
     if not info:
-        return AudioProperties()
+        return AudioProperties(probe_ok=False)
     streams = info.get("streams", [])
     if not streams:
-        return AudioProperties()
+        return AudioProperties(probe_ok=False)
     s = streams[0]
     return AudioProperties(
         sample_rate=int(s.get("sample_rate", 0)),
         bits_per_sample=int(s.get("bits_per_raw_sample", 0) or 0),
         channels=int(s.get("channels", 0)),
+        codec_name=s.get("codec_name", ""),
+        profile=s.get("profile", ""),
+        probe_ok=True,
     )
 
 
@@ -450,12 +470,28 @@ def get_transcode_target(
                     if probe_video_needs_transcode(filepath)
                     else TranscodeTarget.COPY)
 
-        # Native audio — probe for iPod limits
+        # Native audio — probe for iPod limits and codec compatibility
         props = probe_audio(filepath)
+
+        # Probe failed: ffprobe couldn't parse this file.
+        # MP3 is safe to copy blind; M4A/AAC could be HE-AAC so re-encode.
+        if not props.probe_ok:
+            if suffix in {".m4a", ".m4b", ".aac"}:
+                logger.warning("TRANSCODE: could not probe %s — re-encoding to AAC as safe fallback",
+                               Path(filepath).name)
+                return TranscodeTarget.AAC
+            logger.warning("TRANSCODE: could not probe %s — copying as-is", Path(filepath).name)
+            return TranscodeTarget.COPY
 
         if props.exceeds_ipod_limits():
             if suffix in {".m4a", ".m4b"} and not prefer_lossy:
                 return TranscodeTarget.ALAC
+            return TranscodeTarget.AAC
+
+        # HE-AAC v1/v2 — iPod only supports AAC-LC; re-encode to LC
+        if props.is_incompatible_aac_profile():
+            logger.info("TRANSCODE: %s has incompatible AAC profile %r — re-encoding to AAC-LC",
+                        Path(filepath).name, props.profile)
             return TranscodeTarget.AAC
 
         # User wants to shrink native ALAC → AAC
