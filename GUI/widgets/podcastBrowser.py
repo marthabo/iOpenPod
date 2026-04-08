@@ -25,13 +25,12 @@ import logging
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QPixmap, QImage, QIcon
+from PyQt6.QtGui import QColor, QCursor, QFont, QPixmap, QImage, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -41,8 +40,6 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -58,7 +55,6 @@ from ..styles import (
     input_css,
     make_label,
     make_separator,
-    table_css,
     LABEL_SECONDARY,
 )
 from ..glyphs import glyph_icon, glyph_pixmap
@@ -96,6 +92,84 @@ def _fmt_date(ts: float) -> str:
         return ""
 
 
+# ── Podcast episode list ─────────────────────────────────────────────────────
+
+_PODCAST_EPISODE_COLUMNS = ["Title", "ep_status", "length", "date_added", "size"]
+
+
+def _colorize_ep_status(bl) -> None:
+    """Apply per-row colors to the ep_status column after population."""
+    if "ep_status" not in bl._columns:
+        return
+    col_idx = bl._columns.index("ep_status")
+    t = bl.table
+    for row in range(t.rowCount()):
+        item = t.item(row, col_idx)
+        if not item:
+            continue
+        text = item.text()
+        if text == "On iPod":
+            item.setForeground(QColor(Colors.SUCCESS))
+        elif text == "Downloaded":
+            item.setForeground(QColor(Colors.ACCENT))
+        elif "Downloading" in text:
+            item.setForeground(QColor(Colors.WARNING))
+
+
+class _PodcastEpisodeList:
+    """Adapts MusicBrowserList for podcast episode display."""
+
+    @staticmethod
+    def create(owner: "PodcastBrowser"):
+        from .MBListView import MusicBrowserList, COLUMN_CONFIG
+
+        # Register the podcast-only status column if not already present
+        COLUMN_CONFIG.setdefault("ep_status", ("Status", None))
+
+        bl = MusicBrowserList()
+
+        # Override the music-library defaults with podcast-appropriate columns
+        bl._columns = _PODCAST_EPISODE_COLUMNS.copy()
+
+        # Row-based multi-selection; no drag
+        bl.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        bl.table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        bl.table.setDragEnabled(False)
+
+        # Replace iPod track context menu with episode context menu
+        try:
+            bl.table.customContextMenuRequested.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        bl.table.customContextMenuRequested.connect(owner._on_episode_context_menu)
+
+        _orig_populate = bl._populate_table
+        _orig_finish = bl._finish_population
+
+        def _patched_populate():
+            from settings import get_settings
+            s = get_settings()
+            saved = s.show_art_in_tracklist
+            s.show_art_in_tracklist = False
+            try:
+                _orig_populate()
+            finally:
+                s.show_art_in_tracklist = saved
+
+        def _patched_finish():
+            _orig_finish()
+            _colorize_ep_status(bl)
+
+        bl._populate_table = _patched_populate
+        bl._finish_population = _patched_finish
+
+        return bl
+
+
 # ── Feed artwork cache ───────────────────────────────────────────────────────
 # Maps artwork URL → QPixmap so that repeated list refreshes don't re-download.
 _artwork_cache: dict[str, QPixmap] = {}
@@ -118,6 +192,7 @@ class PodcastBrowser(QFrame):
         self._selected_feed = None  # Current PodcastFeed
         self._deferred_reconcile_tracks: list[dict] | None = None
         self._episode_by_guid: dict[str, object] = {}
+        self._episode_dicts: list[dict] = []
 
         self._build_ui()
 
@@ -160,7 +235,8 @@ class PodcastBrowser(QFrame):
         if hasattr(self, '_session_refreshed'):
             self._session_refreshed.clear()
         self._feed_list.clear()
-        self._episode_table.setRowCount(0)
+        self._episode_list.table.setRowCount(0)
+        self._episode_dicts = []
         self._status_label.setText("")
         self._stack.setCurrentIndex(0)
 
@@ -419,126 +495,121 @@ class PodcastBrowser(QFrame):
         return panel
 
     def _build_episode_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setStyleSheet("background: transparent; border: none;")
+        panel = QWidget()
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Feed info header ─────────────────────────────────────────────
+        # ── Feed hero header ─────────────────────────────────────────────
         self._feed_header = QFrame()
-        self._feed_header.setFixedHeight((240))
+        self._feed_header.setObjectName("heroHeader")
+        self._feed_header.setMaximumHeight(375)
         self._feed_header.setStyleSheet(f"""
-            background: {Colors.SURFACE};
-            border: 1px solid {Colors.BORDER_SUBTLE};
-            border-radius: {Metrics.BORDER_RADIUS_LG}px;
+            QFrame#heroHeader {{
+                background: {Colors.BG_DARK};
+                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
+            }}
         """)
 
         hdr_layout = QVBoxLayout(self._feed_header)
-        hdr_layout.setContentsMargins((12), (12), (12), (12))
-        hdr_layout.setSpacing((10))
+        hdr_layout.setContentsMargins(0, 0, 0, 0)
+        hdr_layout.setSpacing(0)
 
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing((12))
+        # Main hero body: art left, info right
+        hero_body = QFrame()
+        hero_body.setStyleSheet("background: transparent; border: none;")
+        body_lay = QHBoxLayout(hero_body)
+        body_lay.setContentsMargins(24, 16, 24, 16)
+        body_lay.setSpacing(20)
 
+        art_size = 120
         self._feed_art = QLabel()
-        art_size = (128)
         self._feed_art.setFixedSize(art_size, art_size)
         self._feed_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._feed_art.setStyleSheet(f"""
-            background: {Colors.SURFACE_RAISED};
-            border-radius: {Metrics.BORDER_RADIUS_SM}px;
+            background: {Colors.SURFACE};
+            border-radius: {Metrics.BORDER_RADIUS}px;
             border: 1px solid {Colors.BORDER_SUBTLE};
-            color: {Colors.TEXT_TERTIARY};
-            font-size: {(32)}px;
         """)
         self._set_feed_art_placeholder()
-        top_row.addWidget(self._feed_art)
+        body_lay.addWidget(self._feed_art, 0, Qt.AlignmentFlag.AlignTop)
 
-        hdr_text = QVBoxLayout()
-        hdr_text.setSpacing((4))
+        # Info column
+        info_col = QVBoxLayout()
+        info_col.setContentsMargins(0, 4, 0, 0)
+        info_col.setSpacing(4)
+
         self._feed_title_label = make_label(
             "Select a podcast",
-            size=(Metrics.FONT_TITLE),
+            size=Metrics.FONT_PAGE_TITLE,
             weight=QFont.Weight.DemiBold,
         )
         self._feed_title_label.setWordWrap(True)
-        hdr_text.addWidget(self._feed_title_label)
+        info_col.addWidget(self._feed_title_label)
 
         self._feed_author_label = make_label(
             "",
-            size=(Metrics.FONT_MD),
+            size=Metrics.FONT_MD,
             style=LABEL_SECONDARY(),
         )
         self._feed_author_label.setWordWrap(True)
-        hdr_text.addWidget(self._feed_author_label)
+        info_col.addWidget(self._feed_author_label)
 
         self._feed_description_label = make_label(
             "",
-            size=(Metrics.FONT_SM),
+            size=Metrics.FONT_SM,
             style=LABEL_SECONDARY(),
             wrap=True,
         )
-        self._feed_description_label.setMaximumHeight((44))
-        hdr_text.addWidget(self._feed_description_label)
+        self._feed_description_label.setMaximumHeight(44)
+        info_col.addWidget(self._feed_description_label)
 
-        self._feed_detail_label = make_label(
-            "",
-            size=(Metrics.FONT_SM),
-            style=LABEL_SECONDARY(),
-        )
-        self._feed_detail_label.setWordWrap(True)
-        hdr_text.addWidget(self._feed_detail_label)
+        info_col.addSpacing(4)
 
-        top_row.addLayout(hdr_text, stretch=1)
+        # Stats row: episodes · downloaded · on iPod
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+        self._feed_stat_episodes = make_label("", size=Metrics.FONT_SM,
+                                              style=f"color: {Colors.TEXT_SECONDARY};")
+        self._feed_stat_downloaded = make_label("", size=Metrics.FONT_SM,
+                                                style=f"color: {Colors.ACCENT};")
+        self._feed_stat_on_ipod = make_label("", size=Metrics.FONT_SM,
+                                             style=f"color: {Colors.SUCCESS};")
+        # hidden ghost label kept for _show_episodes compat
+        self._feed_stat_extra = make_label("", size=Metrics.FONT_SM)
+        self._feed_stat_extra.hide()
 
-        rhs_col = QVBoxLayout()
-        rhs_col.setSpacing((5))
-        rhs_col.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+        stats_row.addWidget(self._feed_stat_episodes)
+        stats_row.addWidget(self._feed_stat_downloaded)
+        stats_row.addWidget(self._feed_stat_on_ipod)
+        stats_row.addStretch()
+        info_col.addLayout(stats_row)
 
-        self._feed_stat_episodes = make_label(
-            "",
-            size=(Metrics.FONT_SM),
-            style=f"color: {Colors.TEXT_PRIMARY};",
-        )
-        self._feed_stat_downloaded = make_label(
-            "",
-            size=(Metrics.FONT_SM),
-            style=f"color: {Colors.ACCENT};",
-        )
-        self._feed_stat_on_ipod = make_label(
-            "",
-            size=(Metrics.FONT_SM),
-            style=f"color: {Colors.SUCCESS};",
-        )
-        self._feed_stat_extra = make_label(
-            "",
-            size=(Metrics.FONT_SM),
-            style=LABEL_SECONDARY(),
-            wrap=True,
-        )
-        self._feed_stat_extra.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._feed_detail_label = make_label("", size=Metrics.FONT_SM, style=LABEL_SECONDARY())
+        info_col.addWidget(self._feed_detail_label)
 
-        rhs_col.addWidget(self._feed_stat_episodes, alignment=Qt.AlignmentFlag.AlignRight)
-        rhs_col.addWidget(self._feed_stat_downloaded, alignment=Qt.AlignmentFlag.AlignRight)
-        rhs_col.addWidget(self._feed_stat_on_ipod, alignment=Qt.AlignmentFlag.AlignRight)
-        rhs_col.addWidget(self._feed_stat_extra, alignment=Qt.AlignmentFlag.AlignRight)
-        rhs_col.addStretch()
-        top_row.addLayout(rhs_col)
+        info_col.addStretch()
+        body_lay.addLayout(info_col, 1)
+        hdr_layout.addWidget(hero_body)
 
-        hdr_layout.addLayout(top_row)
+        self._hero_btns: list[QPushButton] = []
+        self._reset_feed_hero_color()  # apply initial default styling
 
-        # ── Per-feed settings controls ─────────────────────────────────
+        # ── Per-feed settings strip ────────────────────────────────────
+        hdr_layout.addWidget(make_separator())
+
+        settings_strip = QFrame()
+        settings_strip.setStyleSheet("background: transparent; border: none;")
+        strip_lay = QHBoxLayout(settings_strip)
+        strip_lay.setContentsMargins(24, 8, 24, 10)
+        strip_lay.setSpacing(8)
+
         _lbl_css = (
-            f"color: {Colors.TEXT_SECONDARY}; background: transparent; "
-            f"border: none;"
+            f"color: {Colors.TEXT_SECONDARY}; background: transparent; border: none;"
         )
         _combo_style = combo_css()
-        _spin_style = input_css() + """
-            QSpinBox { padding: 2px 6px; border-radius: 4px; }
-        """
+        _spin_style = input_css() + "QSpinBox { padding: 2px 6px; border-radius: 4px; }"
 
         def _make_setting_combo(options: list[str], width: int = 110) -> QComboBox:
             cb = QComboBox()
@@ -554,62 +625,39 @@ class PodcastBrowser(QFrame):
             lbl.setStyleSheet(_lbl_css)
             return lbl
 
-        settings_area = QVBoxLayout()
-        settings_area.setContentsMargins(0, 0, 0, 0)
-        settings_area.setSpacing(6)
-
-        # Row 1: Episode Slots, Fill Mode, Clear Method
-        row1 = QHBoxLayout()
-        row1.setContentsMargins(0, 0, 0, 0)
-        row1.setSpacing(6)
-        row1.addSpacing(art_size + 12)
-
-        row1.addWidget(_make_setting_label("Episodes:"))
+        strip_lay.addWidget(_make_setting_label("Episodes:"))
         self._feed_episode_slots = QSpinBox()
         self._feed_episode_slots.setRange(1, 50)
         self._feed_episode_slots.setValue(3)
         self._feed_episode_slots.setFixedWidth(60)
         self._feed_episode_slots.setFont(QFont(FONT_FAMILY, Metrics.FONT_SM))
         self._feed_episode_slots.setStyleSheet(_spin_style)
-        row1.addWidget(self._feed_episode_slots)
+        strip_lay.addWidget(self._feed_episode_slots)
 
-        row1.addSpacing(8)
-        row1.addWidget(_make_setting_label("Fill with:"))
-        self._feed_fill_mode = _make_setting_combo(
-            ["Newest Episode", "Next Episode"],
-        )
-        row1.addWidget(self._feed_fill_mode)
+        strip_lay.addSpacing(8)
+        strip_lay.addWidget(_make_setting_label("Fill with:"))
+        self._feed_fill_mode = _make_setting_combo(["Newest Episode", "Next Episode"])
+        strip_lay.addWidget(self._feed_fill_mode)
 
-        row1.addSpacing(8)
-        row1.addWidget(_make_setting_label("Clear method:"))
+        strip_lay.addSpacing(8)
+        strip_lay.addWidget(_make_setting_label("Clear method:"))
         self._feed_clear_method = _make_setting_combo(
-            ["Remove Immediately", "Mark for Replacement"], width=140,
-        )
-        row1.addWidget(self._feed_clear_method)
-        row1.addStretch()
+            ["Remove Immediately", "Mark for Replacement"], width=140)
+        strip_lay.addWidget(self._feed_clear_method)
 
-        # Row 2: Clear When Listened, Clear Older Than
-        row2 = QHBoxLayout()
-        row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(6)
-        row2.addSpacing(art_size + 12)
-
-        row2.addWidget(_make_setting_label("Clear when listened:"))
+        strip_lay.addSpacing(8)
+        strip_lay.addWidget(_make_setting_label("Clear when listened:"))
         self._feed_clear_listened = _make_setting_combo(["Yes", "No"], width=70)
-        row2.addWidget(self._feed_clear_listened)
+        strip_lay.addWidget(self._feed_clear_listened)
 
-        row2.addSpacing(8)
-        row2.addWidget(_make_setting_label("Clear when older than:"))
+        strip_lay.addSpacing(8)
+        strip_lay.addWidget(_make_setting_label("Clear older than:"))
         self._feed_clear_older = _make_setting_combo([
             "1 Day", "3 Days", "1 Week", "2 Weeks",
             "1 Month", "2 Months", "3 Months", "Never",
         ])
-        row2.addWidget(self._feed_clear_older)
-        row2.addStretch()
-
-        settings_area.addLayout(row1)
-        settings_area.addLayout(row2)
-        hdr_layout.addLayout(settings_area)
+        strip_lay.addWidget(self._feed_clear_older)
+        strip_lay.addStretch()
 
         # Connect setting changes to save handler
         self._feed_episode_slots.valueChanged.connect(self._on_feed_setting_changed)
@@ -618,42 +666,13 @@ class PodcastBrowser(QFrame):
         self._feed_clear_older.currentTextChanged.connect(self._on_feed_setting_changed)
         self._feed_clear_method.currentTextChanged.connect(self._on_feed_setting_changed)
 
+        hdr_layout.addWidget(settings_strip)
+
         layout.addWidget(self._feed_header)
-        layout.addWidget(make_separator())
 
-        # ── Episode table ────────────────────────────────────────────────
-        self._episode_table = QTableWidget(0, _COL_COUNT)
-        self._episode_table.setHorizontalHeaderLabels(
-            ["Title", "Duration", "Date", "Status"]
-        )
-        self._episode_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._episode_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
-        self._episode_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._episode_table.customContextMenuRequested.connect(self._on_episode_context_menu)
-        vh = self._episode_table.verticalHeader()
-        if vh:
-            vh.setVisible(False)
-            vh.setDefaultSectionSize((32))
-        self._episode_table.setShowGrid(False)
-        self._episode_table.setAlternatingRowColors(True)
-        self._episode_table.setSortingEnabled(False)
-        self._episode_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-
-        # Column widths
-        hh = self._episode_table.horizontalHeader()
-        assert hh is not None
-        hh.setMinimumSectionSize((30))
-        hh.resizeSection(_COL_DURATION, (70))
-        hh.resizeSection(_COL_DATE, (90))
-        hh.resizeSection(_COL_STATUS, (110))
-        hh.setSectionResizeMode(_COL_TITLE, QHeaderView.ResizeMode.Stretch)
-        self._episode_table.setStyleSheet(table_css())
-
-        layout.addWidget(self._episode_table, stretch=1)
+        # ── Episode list (MusicBrowserList-based) ────────────────────────
+        self._episode_list = _PodcastEpisodeList.create(self)
+        layout.addWidget(self._episode_list, stretch=1)
 
         # ── Download progress bar (hidden by default) ────────────────────
         self._progress_bar = QProgressBar()
@@ -673,38 +692,20 @@ class PodcastBrowser(QFrame):
         self._progress_bar.hide()
         layout.addWidget(self._progress_bar)
 
-        # ── Action bar ───────────────────────────────────────────────────
-        action_bar = QFrame()
-        action_bar.setFixedHeight((44))
-        action_bar.setStyleSheet(
-            f"background: {Colors.SURFACE}; border-top: 1px solid {Colors.BORDER_SUBTLE};"
+        # ── Status toast (hidden until a message is set) ─────────────────
+        self._status_toast = QFrame()
+        self._status_toast.setFixedHeight(32)
+        self._status_toast.setStyleSheet(
+            f"background: {Colors.SURFACE_RAISED};"
+            f" border-top: 1px solid {Colors.BORDER_SUBTLE};"
         )
-
-        action_layout = QHBoxLayout(action_bar)
-        action_layout.setContentsMargins((12), (6), (12), (6))
-        action_layout.setSpacing((8))
-
-        self._add_to_ipod_btn = QPushButton("Add to iPod")
-        self._add_to_ipod_btn.setFont(QFont(FONT_FAMILY, (Metrics.FONT_SM)))
-        self._add_to_ipod_btn.setStyleSheet(accent_btn_css())
-        self._add_to_ipod_btn.setFixedHeight((30))
-        _sync_ic = glyph_icon("download", (14), Colors.TEXT_ON_ACCENT)
-        if _sync_ic:
-            self._add_to_ipod_btn.setIcon(_sync_ic)
-            self._add_to_ipod_btn.setIconSize(QSize((14), (14)))
-        self._add_to_ipod_btn.clicked.connect(self._on_add_to_ipod)
-        action_layout.addWidget(self._add_to_ipod_btn)
-
-        action_layout.addStretch()
-
-        self._action_status = make_label(
-            "",
-            size=(Metrics.FONT_SM),
-            style=LABEL_SECONDARY(),
-        )
-        action_layout.addWidget(self._action_status)
-
-        layout.addWidget(action_bar)
+        toast_lay = QHBoxLayout(self._status_toast)
+        toast_lay.setContentsMargins(12, 0, 12, 0)
+        self._action_status = make_label("", size=Metrics.FONT_SM, style=LABEL_SECONDARY())
+        toast_lay.addWidget(self._action_status)
+        toast_lay.addStretch()
+        self._status_toast.hide()
+        layout.addWidget(self._status_toast)
 
         return panel
 
@@ -842,13 +843,14 @@ class PodcastBrowser(QFrame):
 
     def _on_episode_context_menu(self, pos) -> None:
         """Right-click on episode rows → Add/Remove actions."""
+        t = self._episode_list.table
         # If right-clicked row is not already selected, target that row only.
-        row = self._episode_table.rowAt(pos.y())
+        row = t.rowAt(pos.y())
         if row >= 0:
-            title_item = self._episode_table.item(row, _COL_TITLE)
-            if title_item and not title_item.isSelected():
-                self._episode_table.clearSelection()
-                self._episode_table.selectRow(row)
+            selected_rows = {idx.row() for idx in t.selectedIndexes()}
+            if row not in selected_rows:
+                t.clearSelection()
+                t.selectRow(row)
 
         selected = self._get_selected_episodes()
         if not selected:
@@ -907,7 +909,7 @@ class PodcastBrowser(QFrame):
             suffix = f" ({n})" if n > 1 else ""
             remove_ipod_action = menu.addAction(f"Remove from iPod{suffix}")
 
-        viewport = self._episode_table.viewport()
+        viewport = self._episode_list.table.viewport()
         if not viewport:
             return
         action = menu.exec(viewport.mapToGlobal(pos))
@@ -922,10 +924,23 @@ class PodcastBrowser(QFrame):
 
     # ── Episode table ────────────────────────────────────────────────────
 
+    @staticmethod
+    def _ep_to_dict(ep, status_text: str) -> dict:
+        """Convert a PodcastEpisode to a MusicBrowserList-compatible dict."""
+        return {
+            "Title": ep.title or ep.guid or "",
+            "ep_status": status_text,
+            "length": (ep.duration_seconds or 0) * 1000,
+            "date_added": int(ep.pub_date or 0),
+            "size": ep.size_bytes or 0,
+            "_ep_guid": ep.guid,
+        }
+
     def _show_episodes(self, feed) -> None:
-        """Populate the episode table for the given feed."""
-        self._episode_table.setRowCount(0)
+        """Populate the episode list for the given feed."""
+        bl = self._episode_list
         self._episode_by_guid.clear()
+        self._episode_dicts = []
 
         if not feed:
             self._feed_title_label.setText("Select a podcast")
@@ -938,6 +953,10 @@ class PodcastBrowser(QFrame):
             self._feed_stat_extra.setText("")
             self._load_feed_settings(None)
             self._set_feed_art_placeholder()
+            bl._all_tracks = []
+            bl._tracks = []
+            bl._load_id += 1
+            bl._populate_table()
             return
 
         self._feed_title_label.setText(feed.title or "Untitled Podcast")
@@ -980,32 +999,17 @@ class PodcastBrowser(QFrame):
         # Populate episodes (newest first)
         episodes = sorted(feed.episodes, key=lambda e: e.pub_date, reverse=True)
         self._episode_by_guid = {ep.guid: ep for ep in episodes}
-        self._episode_table.setRowCount(len(episodes))
+        self._episode_dicts = [
+            self._ep_to_dict(ep, self._episode_status_display(ep)[0])
+            for ep in episodes
+        ]
 
-        for row, ep in enumerate(episodes):
-            # Title
-            title_item = QTableWidgetItem(ep.title or ep.guid)
-            title_item.setData(Qt.ItemDataRole.UserRole, ep.guid)
-            title_item.setToolTip(ep.description[:300] if ep.description else "")
-            self._episode_table.setItem(row, _COL_TITLE, title_item)
-
-            # Duration
-            dur_item = QTableWidgetItem(_fmt_duration(ep.duration_seconds))
-            dur_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._episode_table.setItem(row, _COL_DURATION, dur_item)
-
-            # Date
-            date_item = QTableWidgetItem(_fmt_date(ep.pub_date))
-            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._episode_table.setItem(row, _COL_DATE, date_item)
-
-            # Status
-            status_text, status_color = self._episode_status_display(ep)
-            status_item = QTableWidgetItem(status_text)
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if status_color:
-                status_item.setForeground(status_color)
-            self._episode_table.setItem(row, _COL_STATUS, status_item)
+        bl._all_tracks = self._episode_dicts
+        bl._tracks = self._episode_dicts
+        bl._is_playlist_mode = False
+        bl._current_filter = None
+        bl._load_id += 1
+        bl._populate_table()
 
     @staticmethod
     def _episode_status_display(ep):
@@ -1308,15 +1312,19 @@ class PodcastBrowser(QFrame):
         if not self._selected_feed:
             return []
 
-        selected_rows = sorted({idx.row() for idx in self._episode_table.selectedIndexes()})
+        t = self._episode_list.table
+        selected_rows = sorted({idx.row() for idx in t.selectedIndexes()})
         result = []
         for row in selected_rows:
-            title_item = self._episode_table.item(row, _COL_TITLE)
-            if title_item:
-                guid = title_item.data(Qt.ItemDataRole.UserRole)
-                ep = self._episode_by_guid.get(guid)
-                if ep is not None:
-                    result.append((row, ep))
+            # Anchor item at column 0 (Title) stores original dict index in UserRole+1
+            anchor = t.item(row, 0)
+            if anchor:
+                orig_idx = anchor.data(Qt.ItemDataRole.UserRole + 1)
+                if orig_idx is not None and 0 <= orig_idx < len(self._episode_dicts):
+                    guid = self._episode_dicts[orig_idx].get("_ep_guid")
+                    ep = self._episode_by_guid.get(guid)
+                    if ep is not None:
+                        result.append((row, ep))
         return result
 
     # ── Add to iPod (download + sync in one step) ──────────────────
@@ -1355,7 +1363,6 @@ class PodcastBrowser(QFrame):
             return
 
         feed = self._selected_feed
-        self._add_to_ipod_btn.setEnabled(False)
 
         # Build sync plan directly (pending episodes will download during sync)
         self._build_and_emit_plan(actionable, feed)
@@ -1374,7 +1381,6 @@ class PodcastBrowser(QFrame):
 
         if not episodes_for_plan:
             self._set_action_status("No episodes to sync")
-            self._add_to_ipod_btn.setEnabled(True)
             return
 
         # Get current iPod tracks for dedup
@@ -1391,7 +1397,6 @@ class PodcastBrowser(QFrame):
 
         if not plan.to_add:
             self._set_action_status("All selected episodes are already on iPod")
-            self._add_to_ipod_btn.setEnabled(True)
             return
 
         n = len(plan.to_add)
@@ -1399,7 +1404,6 @@ class PodcastBrowser(QFrame):
             f"Sending {n} episode{'s' if n != 1 else ''} to sync…")
 
         self.podcast_sync_requested.emit(plan)
-        self._add_to_ipod_btn.setEnabled(True)
 
     def _on_add_error(self, error_tuple) -> None:
         self._progress_bar.hide()
@@ -1610,8 +1614,110 @@ class PodcastBrowser(QFrame):
             )
             self._feed_art.setPixmap(pm)
             self._feed_art.setText("")
+        else:
+            self._feed_art.setText("◎")
+        self._reset_feed_hero_color()
+
+    def _apply_hero_color_from_pixmap(self, pixmap: QPixmap) -> None:
+        """Extract average color from pixmap using Qt only (no PIL, no encode)."""
+        try:
+            # Scale to a tiny thumbnail with Qt — fast nearest-neighbor
+            small = pixmap.scaled(
+                20, 20,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+            img = small.toImage().convertToFormat(QImage.Format.Format_RGB888)
+            ptr = img.bits()
+            if ptr is None:
+                return
+            raw = bytes(ptr.asarray(img.width() * img.height() * 3))
+            n = img.width() * img.height()
+            if n == 0:
+                return
+            r = sum(raw[0::3]) // n
+            g = sum(raw[1::3]) // n
+            b = sum(raw[2::3]) // n
+            self._apply_feed_hero_color(r, g, b)
+        except Exception:
+            pass
+
+    def _apply_feed_hero_color(self, r: int, g: int, b: int) -> None:
+        """Tint the hero header with the artwork's dominant color."""
+        if Colors._active_mode == "light":
+            glass_bg = "rgba(0, 0, 0, 20)"
+            glass_hover = "rgba(0, 0, 0, 28)"
+            glass_press = "rgba(0, 0, 0, 14)"
+            glass_border = "rgba(0, 0, 0, 24)"
+        else:
+            glass_bg = "rgba(255, 255, 255, 18)"
+            glass_hover = "rgba(255, 255, 255, 35)"
+            glass_press = "rgba(255, 255, 255, 12)"
+            glass_border = "rgba(255, 255, 255, 15)"
+
+        self._feed_header.setStyleSheet(f"""
+            QFrame#heroHeader {{
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba({r}, {g}, {b}, 80),
+                    stop:1 {Colors.BG_DARK}
+                );
+                border-bottom: 1px solid rgba({r}, {g}, {b}, 40);
+            }}
+        """)
+        self._feed_art.setStyleSheet(f"""
+            background: rgba({r}, {g}, {b}, 30);
+            border-radius: {Metrics.BORDER_RADIUS}px;
+            border: 1px solid rgba({r}, {g}, {b}, 50);
+        """)
+        self._feed_title_label.setStyleSheet(
+            "color: " + Colors.TEXT_PRIMARY + "; background: transparent;")
+        self._feed_author_label.setStyleSheet(
+            "color: " + Colors.TEXT_SECONDARY + "; background: transparent;")
+        self._feed_description_label.setStyleSheet(
+            "color: " + Colors.TEXT_SECONDARY + "; background: transparent;")
+        self._feed_detail_label.setStyleSheet(
+            "color: " + Colors.TEXT_TERTIARY + "; background: transparent;")
+
+        _glass_css = btn_css(
+            bg=glass_bg,
+            bg_hover=glass_hover,
+            bg_press=glass_press,
+            fg=Colors.TEXT_PRIMARY,
+            border=f"1px solid {glass_border}",
+            padding="5px 12px",
+            radius=Metrics.BORDER_RADIUS_SM,
+        )
+        for btn in self._hero_btns:
+            btn.setStyleSheet(_glass_css)
+
+    def _reset_feed_hero_color(self) -> None:
+        """Reset the hero to the default (no artwork tint) style."""
+        self._feed_header.setStyleSheet(f"""
+            QFrame#heroHeader {{
+                background: {Colors.BG_DARK};
+                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
+            }}
+        """)
+        self._feed_art.setStyleSheet(f"""
+            background: {Colors.SURFACE};
+            border-radius: {Metrics.BORDER_RADIUS}px;
+            border: 1px solid {Colors.BORDER_SUBTLE};
+        """)
+        # Labels and buttons may not exist yet during initial construction
+        if not hasattr(self, '_feed_title_label'):
             return
-        self._feed_art.setText("◎")
+        self._feed_title_label.setStyleSheet(
+            "color: " + Colors.TEXT_PRIMARY + "; background: transparent;")
+        self._feed_author_label.setStyleSheet(
+            "color: " + Colors.TEXT_SECONDARY + "; background: transparent;")
+        self._feed_description_label.setStyleSheet(
+            "color: " + Colors.TEXT_SECONDARY + "; background: transparent;")
+        self._feed_detail_label.setStyleSheet(
+            "color: " + Colors.TEXT_TERTIARY + "; background: transparent;")
+        _default_css = btn_css(padding="5px 12px", radius=Metrics.BORDER_RADIUS_SM)
+        for btn in self._hero_btns:
+            btn.setStyleSheet(_default_css)
 
     def _load_feed_artwork(self, url: str) -> None:
         """Load feed artwork for the header panel in background."""
@@ -1628,6 +1734,7 @@ class PodcastBrowser(QFrame):
             )
             self._feed_art.setPixmap(pm)
             self._feed_art.setText("")
+            self._apply_hero_color_from_pixmap(_artwork_cache[url])
             return
 
         from ..app import Worker, ThreadPoolSingleton
@@ -1670,6 +1777,7 @@ class PodcastBrowser(QFrame):
             )
             self._feed_art.setPixmap(pm)
             self._feed_art.setText("")
+            self._apply_hero_color_from_pixmap(full_pm)
 
         # Update feed list item icon too
         self._update_feed_list_icon(url, full_pm)
@@ -1737,11 +1845,16 @@ class PodcastBrowser(QFrame):
             self._status_label.setText("")
 
     def _set_action_status(self, text: str, timeout_ms: int = 5000) -> None:
-        """Set action bar status text with auto-clear."""
+        """Show the status toast with *text*, auto-hiding after *timeout_ms*."""
         self._action_status.setText(text)
+        if text:
+            self._status_toast.show()
+        else:
+            self._status_toast.hide()
         if timeout_ms > 0 and text:
             QTimer.singleShot(timeout_ms, lambda: self._clear_action_if(text))
 
     def _clear_action_if(self, expected: str) -> None:
         if self._action_status.text() == expected:
             self._action_status.setText("")
+            self._status_toast.hide()

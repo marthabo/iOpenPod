@@ -357,6 +357,7 @@ class FingerprintDiffEngine:
         track_edits: Optional[dict[int, dict[str, tuple]]] = None,
         sync_workers: int = 0,
         rating_strategy: str = "ipod_wins",
+        allowed_paths: Optional[frozenset[str]] = None,
     ) -> SyncPlan:
         """
         Compute the full sync plan.
@@ -464,6 +465,10 @@ class FingerprintDiffEngine:
             progress_callback("scan_pc", 0, 0, "Scanning PC library...")
 
         pc_tracks = list(self.pc_library.scan(include_video=self.supports_video))
+
+        # Filter to only user-selected paths (selective sync mode).
+        if allowed_paths is not None:
+            pc_tracks = [t for t in pc_tracks if t.path in allowed_paths]
 
         # Filter out podcast tracks when the device doesn't support podcasts.
         # This mirrors the include_video filter: no point syncing content the

@@ -42,7 +42,8 @@ class SyncWorker(QThread):
     def __init__(self, pc_folder: str, ipod_tracks: list, ipod_path: str = "",
                  supports_video: bool = True, supports_podcast: bool = True,
                  *, track_edits: dict | None = None,
-                 sync_workers: int = 0, rating_strategy: str = "ipod_wins"):
+                 sync_workers: int = 0, rating_strategy: str = "ipod_wins",
+                 allowed_paths: frozenset[str] | None = None):
         super().__init__()
         self.pc_folder = pc_folder
         self.ipod_tracks = ipod_tracks
@@ -52,6 +53,7 @@ class SyncWorker(QThread):
         self.track_edits = track_edits
         self.sync_workers = sync_workers
         self.rating_strategy = rating_strategy
+        self.allowed_paths = allowed_paths
 
     def run(self):
         try:
@@ -73,6 +75,7 @@ class SyncWorker(QThread):
                 track_edits=self.track_edits,
                 sync_workers=self.sync_workers,
                 rating_strategy=self.rating_strategy,
+                allowed_paths=self.allowed_paths,
             )
 
             if not self.isInterruptionRequested():
@@ -2471,6 +2474,7 @@ class PCFolderDialog(QDialog):
         self.setWindowTitle("Select Media Folder")
         self.setMinimumWidth((440))
         self.selected_folder = ""
+        self.sync_mode = ""  # "full" or "selective"
         self.last_folder = last_folder
 
         # Dark theme stylesheet
@@ -2564,8 +2568,12 @@ class PCFolderDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
-        ok_btn = QPushButton("OK", self)
-        ok_btn.setStyleSheet(f"""
+        selective_btn = QPushButton("Selective Sync", self)
+        selective_btn.clicked.connect(self._accept_selective)
+        btn_row.addWidget(selective_btn)
+
+        full_btn = QPushButton("Full Sync", self)
+        full_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {Colors.ACCENT};
                 border: none;
@@ -2578,8 +2586,8 @@ class PCFolderDialog(QDialog):
                 background: {Colors.ACCENT_LIGHT};
             }}
         """)
-        ok_btn.clicked.connect(self._accept)
-        btn_row.addWidget(ok_btn)
+        full_btn.clicked.connect(self._accept_full)
+        btn_row.addWidget(full_btn)
         layout.addLayout(btn_row)
 
     def _browse(self):
@@ -2593,16 +2601,25 @@ class PCFolderDialog(QDialog):
             self.selected_folder = folder
             self.folder_edit.setText(folder)
 
-    def _accept(self):
+    def _validate_folder(self) -> bool:
         if not self.selected_folder and self.last_folder:
             self.selected_folder = self.last_folder
-
         if not self.selected_folder:
             QMessageBox.warning(self, "No Folder", "Please select a media folder.")
-            return
-
+            return False
         if not os.path.isdir(self.selected_folder):
             QMessageBox.warning(self, "Invalid Folder", "The selected folder does not exist.")
-            return
+            return False
+        return True
 
+    def _accept_full(self):
+        if not self._validate_folder():
+            return
+        self.sync_mode = "full"
+        self.accept()
+
+    def _accept_selective(self):
+        if not self._validate_folder():
+            return
+        self.sync_mode = "selective"
         self.accept()

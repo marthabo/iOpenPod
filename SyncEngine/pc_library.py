@@ -46,6 +46,7 @@ _SP_KWARGS: dict = (
     {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
 )
 
+
 def _replaygain_to_soundcheck(gain_db: float) -> int:
     """Convert ReplayGain dB value to iPod Sound Check value.
 
@@ -704,10 +705,10 @@ class PCLibrary:
         )
 
     def _compute_art_hash(self, file_path: Path) -> Optional[str]:
-        """Compute MD5 hash of embedded album art for change detection."""
+        """Compute MD5 hash of album art (embedded or folder image) for change detection."""
         try:
-            from ArtworkDB_Writer.art_extractor import extract_art, art_hash
-            art_bytes = extract_art(str(file_path))
+            from ArtworkDB_Writer.art_extractor import extract_art_with_folder, art_hash
+            art_bytes = extract_art_with_folder(str(file_path))
             if art_bytes:
                 return art_hash(art_bytes)
         except Exception as e:

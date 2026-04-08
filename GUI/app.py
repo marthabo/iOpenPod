@@ -177,6 +177,13 @@ class MainWindow(QMainWindow):
         self.backupBrowser.closed.connect(self.hideBackupBrowser)
         self.centralStack.addWidget(self.backupBrowser)  # Index 3
 
+        # Selective sync browser page
+        from GUI.widgets.selectiveSyncBrowser import SelectiveSyncBrowser
+        self.selectiveSyncBrowser = SelectiveSyncBrowser()
+        self.selectiveSyncBrowser.selection_done.connect(self._onSelectiveSyncDone)
+        self.selectiveSyncBrowser.cancelled.connect(self._onSelectiveSyncCancelled)
+        self.centralStack.addWidget(self.selectiveSyncBrowser)  # Index 4
+
         # No-device placeholder section (shown in content area; sidebar stays visible)
         self.noDeviceWidget = QWidget()
         no_device_layout = QVBoxLayout(self.noDeviceWidget)
@@ -637,6 +644,12 @@ class MainWindow(QMainWindow):
         settings.media_folder = dialog.selected_folder
         settings.save()
 
+        # Branch: selective sync opens the PC library browser first
+        if dialog.sync_mode == "selective":
+            self.centralStack.setCurrentIndex(4)
+            self.selectiveSyncBrowser.load(self._last_pc_folder)
+            return
+
         # Switch to sync review view
         self.centralStack.setCurrentIndex(1)
         self.syncReview.show_loading()
@@ -876,6 +889,50 @@ class MainWindow(QMainWindow):
     def _onSyncError(self, error_msg: str):
         """Called when sync diff fails."""
         self.syncReview.show_error(error_msg)
+
+    def _onSelectiveSyncDone(self, folder: str, selected_paths):
+        """User finished picking tracks in selective sync; run diff on selection."""
+        self._last_pc_folder = folder
+        self.centralStack.setCurrentIndex(1)
+        self.syncReview.show_loading()
+
+        from device_info import get_current_device
+        dev = get_current_device()
+        caps = dev.capabilities if dev else None
+        supports_video = bool(caps and caps.supports_video)
+        supports_podcast = bool(caps and caps.supports_podcast)
+
+        cache = iTunesDBCache.get_instance()
+        ipod_tracks = cache.get_tracks()
+        track_edits = cache.get_track_edits()
+        settings = get_settings()
+        try:
+            sync_workers = settings.sync_workers
+            rating_strategy = settings.rating_conflict_strategy
+        except Exception:
+            sync_workers = 0
+            rating_strategy = "ipod_wins"
+
+        device_manager = DeviceManager.get_instance()
+        self._sync_worker = SyncWorker(
+            pc_folder=folder,
+            ipod_tracks=ipod_tracks,
+            ipod_path=device_manager.device_path or "",
+            supports_video=supports_video,
+            supports_podcast=supports_podcast,
+            track_edits=track_edits,
+            sync_workers=sync_workers,
+            rating_strategy=rating_strategy,
+            allowed_paths=frozenset(selected_paths),
+        )
+        self._sync_worker.progress.connect(self.syncReview.update_progress)
+        self._sync_worker.finished.connect(self._onSyncDiffComplete)
+        self._sync_worker.error.connect(self._onSyncError)
+        self._sync_worker.start()
+
+    def _onSelectiveSyncCancelled(self):
+        """User cancelled selective sync browser."""
+        self._show_default_page()
 
     def hideSyncReview(self):
         """Return to the main browsing view, stopping any background work."""
