@@ -56,6 +56,15 @@ jobs:
           sudo flatpak remote-modify --enable flathub
           flatpak --system remotes --show-details
 
+      - name: Install Flatpak SDK/runtime
+        run: |
+          sudo flatpak install -y --system flathub \
+            org.freedesktop.Sdk//24.08 \
+            org.freedesktop.Sdk.Locale//24.08 \
+            org.freedesktop.Platform//24.08 \
+            org.freedesktop.Platform.GL.default//24.08 \
+            org.freedesktop.Platform.openh264//2.5.1
+
       - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
