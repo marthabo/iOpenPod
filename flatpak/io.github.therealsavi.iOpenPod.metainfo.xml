@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.marthabo.iOpenPod</id>
+  <id><io class="github iopenpod"></io>.iOpenPod</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>iOpenPod</name>
@@ -33,9 +33,9 @@
     <category>Audio</category>
     <category>Utility</category>
   </categories>
-  <url type="homepage">https://github.com/marthabo/iOpenPod</url>
-  <url type="bugtracker">https://github.com/marthabo/iOpenPod/issues</url>
-  <launchable type="desktop-id">io.github.marthabo.iOpenPod.desktop</launchable>
+  <url type="homepage">https://github.com/TheRealSavi/iOpenPod</url>
+  <url type="bugtracker">https://github.com/TheRealSavi/iOpenPod/issues</url>
+  <launchable type="desktop-id">io.github.therealsavi.iOpenPod.desktop</launchable>
   <provides>
     <binary>iOpenPod</binary>
   </provides>

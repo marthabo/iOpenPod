@@ -58,7 +58,7 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: iOpenPod-Linux.flatpak
-          manifest-path: flatpak/io.github.iopenpod.iOpenPod.yml
+          manifest-path: flatpak/io.github.therealsavi.iOpenPod.yml
           cache-key: flatpak-builder-${{ github.sha }}
 
       # ── Checksum ──────────────────────────────────────────────────────
