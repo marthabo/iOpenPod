@@ -11,6 +11,7 @@ a thumbnail frame using ffmpeg (if available).
 
 import hashlib
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,42 @@ def extract_art(file_path: str) -> Optional[bytes]:
     except Exception as e:
         logger.warning(f"ART: Failed to extract art from {file_path}: {e}")
         return None
+
+
+# Common image filenames used as album/folder artwork.
+_FOLDER_ART_NAMES = (
+    "cover", "folder", "album", "front", "artwork", "thumb",
+)
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")
+
+
+def find_folder_art(file_path: str) -> Optional[str]:
+    """Return the path of a folder artwork image next to *file_path*, or None."""
+    directory = str(Path(file_path).parent)
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return None
+    lower_map = {e.lower(): e for e in entries}
+    for stem in _FOLDER_ART_NAMES:
+        for ext in _IMAGE_EXTS:
+            if (stem + ext) in lower_map:
+                return os.path.join(directory, lower_map[stem + ext])
+    return None
+
+
+def extract_art_with_folder(file_path: str) -> Optional[bytes]:
+    """Like extract_art(), but falls back to folder artwork if no embedded art."""
+    art = extract_art(file_path)
+    if art is not None:
+        return art
+    folder_img = find_folder_art(file_path)
+    if folder_img:
+        try:
+            return Path(folder_img).read_bytes()
+        except OSError:
+            pass
+    return None
 
 
 def _extract_mp3(path: str) -> Optional[bytes]:

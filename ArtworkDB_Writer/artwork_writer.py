@@ -21,7 +21,7 @@ from typing import Optional
 from .rgb565 import (ALL_KNOWN_FORMATS,
                      IPOD_STRIDE_OVERRIDE, convert_art_for_ipod,
                      get_artwork_formats)
-from .art_extractor import extract_art, art_hash
+from .art_extractor import extract_art_with_folder, art_hash
 
 logger = logging.getLogger(__name__)
 
@@ -562,13 +562,13 @@ def write_artworkdb(
             pc_path = pc_file_paths[db_id]
             if os.path.exists(pc_path):
                 tracks_pc_path_exists += 1
-                art_bytes = extract_art(pc_path)
+                art_bytes = extract_art_with_folder(pc_path)
                 if art_bytes:
                     tracks_art_extracted += 1
                 else:
                     tracks_no_art += 1
                     title = _get_track_field(track, 'title') or '?'
-                    logger.debug(f"ART: no embedded art in '{title}' ({pc_path})")
+                    logger.debug(f"ART: no art found for '{title}' ({pc_path})")
             else:
                 title = _get_track_field(track, 'title') or '?'
                 logger.warning(f"ART: PC file not found for '{title}': {pc_path}")

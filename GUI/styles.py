@@ -1290,6 +1290,29 @@ def table_css() -> str:
         QTableWidget::item:hover {{
             background-color: {Colors.SURFACE};
         }}
+        QTableView::indicator {{
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            border: 1px solid {Colors.BORDER};
+            background: {Colors.SURFACE_ALT};
+        }}
+        QTableView::indicator:hover {{
+            border-color: {Colors.BORDER_FOCUS};
+            background: {Colors.SURFACE_HOVER};
+        }}
+        QTableView::indicator:checked {{
+            background: {Colors.ACCENT};
+            border-color: {Colors.ACCENT};
+        }}
+        QTableView::indicator:checked:hover {{
+            background: {Colors.ACCENT_HOVER};
+            border-color: {Colors.ACCENT_HOVER};
+        }}
+        QTableView::indicator:disabled {{
+            background: {Colors.SURFACE};
+            border-color: {Colors.BORDER_SUBTLE};
+        }}
         QHeaderView::section {{
             background-color: {Colors.SURFACE_ALT};
             color: {Colors.TEXT_SECONDARY};
