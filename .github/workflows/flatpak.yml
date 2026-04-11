@@ -27,7 +27,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           path = 'flatpak/io.github.therealsavi.iOpenPod.metainfo.xml'
-          version = '${{ github.event.inputs.tag_name }}'.lstrip('v')
+          version = '${{ github.event.inputs.tag_name }}'.lstrip('v.')
           date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
           tree = ET.parse(path)
