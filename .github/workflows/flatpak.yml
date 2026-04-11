@@ -1,9 +1,12 @@
 name: Flatpak
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (for example: v1.2.3)"
+        required: true
+        type: string
 
 permissions:
   contents: write   # needed to upload assets to the GitHub Release
@@ -14,6 +17,34 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag_name }}
+
+      - name: Update metainfo release version/date
+        run: |
+          python -c "
+          from datetime import datetime, timezone
+          import xml.etree.ElementTree as ET
+
+          path = 'flatpak/io.github.therealsavi.iOpenPod.metainfo.xml'
+          version = '${{ github.event.inputs.tag_name }}'.lstrip('v')
+          date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+          tree = ET.parse(path)
+          root = tree.getroot()
+          releases = root.find('releases')
+          if releases is None:
+              releases = ET.SubElement(root, 'releases')
+          release = releases.find('release')
+          if release is None:
+              release = ET.SubElement(releases, 'release')
+
+          release.set('version', version)
+          release.set('date', date)
+          tree.write(path, encoding='UTF-8', xml_declaration=True)
+
+          print(f'Updated {path} -> version={version}, date={date}')
+          "
 
       # ── Python + uv ───────────────────────────────────────────────────
       - uses: actions/setup-python@v5
@@ -77,6 +108,7 @@ jobs:
       - name: Upload Flatpak bundle to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag_name }}
           files: |
             iOpenPod-Linux.flatpak
             iOpenPod-Linux.flatpak.sha256
